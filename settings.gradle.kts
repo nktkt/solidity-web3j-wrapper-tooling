@@ -1,1 +1,1 @@
-rootProject.name = "solidity-java-web3j-tooling"
+rootProject.name = "solidity-web3j-wrapper-tooling"
