@@ -6,9 +6,9 @@ import dev.naoki.ethwhite.core.BlockContext;
 import dev.naoki.ethwhite.core.CallData;
 import dev.naoki.ethwhite.core.GasMeter;
 import dev.naoki.ethwhite.core.MessageResult;
+import dev.naoki.ethwhite.core.ExecutionException;
 import dev.naoki.ethwhite.core.Word;
 import dev.naoki.ethwhite.core.WorldState;
-import dev.naoki.ethwhite.util.Hex;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -21,18 +21,20 @@ public final class ContractContext {
     private final MessageDispatcher dispatcher;
     private final Address self;
     private final Address sender;
+    private final Address origin;
     private final BigInteger value;
     private final byte[] data;
     private final GasMeter gasMeter;
     private final int depth;
 
     public ContractContext(WorldState state, BlockContext block, MessageDispatcher dispatcher, Address self,
-                           Address sender, BigInteger value, byte[] data, GasMeter gasMeter, int depth) {
+                           Address sender, Address origin, BigInteger value, byte[] data, GasMeter gasMeter, int depth) {
         this.state = Objects.requireNonNull(state, "state");
         this.block = Objects.requireNonNull(block, "block");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
         this.self = Objects.requireNonNull(self, "self");
         this.sender = Objects.requireNonNull(sender, "sender");
+        this.origin = Objects.requireNonNull(origin, "origin");
         this.value = Objects.requireNonNull(value, "value");
         this.data = Arrays.copyOf(data, data.length);
         this.gasMeter = Objects.requireNonNull(gasMeter, "gasMeter");
@@ -53,6 +55,10 @@ public final class ContractContext {
 
     public Address sender() {
         return sender;
+    }
+
+    public Address origin() {
+        return origin;
     }
 
     public BigInteger value() {
@@ -114,22 +120,45 @@ public final class ContractContext {
     }
 
     public MessageResult call(Address to, BigInteger amount, CallData callData, long gasLimit) {
+        reserveGasForChild(gasLimit);
         gasMeter.consume(40, "dispatching sub-call");
         MessageResult result = dispatcher.call(self, to, amount, callData.encode(), gasLimit, depth + 1);
-        long refunded = gasLimit - result.gasRemaining();
-        if (refunded > 0) {
-            gasMeter.consume(refunded, "paying for sub-call execution");
-        }
+        settleChildGas(gasLimit, result.gasRemaining(), "paying for sub-call execution");
         return result;
     }
 
     public MessageResult call(Address to, BigInteger amount, byte[] payload, long gasLimit) {
+        reserveGasForChild(gasLimit);
         gasMeter.consume(40, "dispatching sub-call");
         MessageResult result = dispatcher.call(self, to, amount, payload, gasLimit, depth + 1);
-        long refunded = gasLimit - result.gasRemaining();
-        if (refunded > 0) {
-            gasMeter.consume(refunded, "paying for sub-call execution");
-        }
+        settleChildGas(gasLimit, result.gasRemaining(), "paying for sub-call execution");
         return result;
+    }
+
+    public ContractCreationResult create(BigInteger amount, byte[] initCode, long gasLimit) {
+        reserveGasForChild(gasLimit);
+        gasMeter.consume(80, "dispatching contract creation");
+        ContractCreationResult result = dispatcher.create(self, amount, initCode, gasLimit, depth + 1);
+        settleChildGas(gasLimit, result.gasRemaining(), "paying for contract creation");
+        return result;
+    }
+
+    private void reserveGasForChild(long gasLimit) {
+        if (gasLimit < 0) {
+            throw new ExecutionException("Gas limit must not be negative");
+        }
+        if (gasLimit > gasMeter.remaining()) {
+            throw new ExecutionException("Sub-call gas exceeds available gas");
+        }
+    }
+
+    private void settleChildGas(long gasLimit, long gasRemaining, String reason) {
+        long spent = gasLimit - gasRemaining;
+        if (spent < 0) {
+            throw new ExecutionException("Child call returned invalid gas value");
+        }
+        if (spent > 0) {
+            gasMeter.consume(spent, reason);
+        }
     }
 }

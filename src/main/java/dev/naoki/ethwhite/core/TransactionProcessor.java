@@ -1,14 +1,15 @@
 package dev.naoki.ethwhite.core;
 
 import dev.naoki.ethwhite.contract.ContractContext;
+import dev.naoki.ethwhite.contract.ContractCreationResult;
 import dev.naoki.ethwhite.contract.ContractRegistry;
 import dev.naoki.ethwhite.contract.MessageDispatcher;
 import dev.naoki.ethwhite.contract.NativeContract;
+import dev.naoki.ethwhite.crypto.Keccak;
+import dev.naoki.ethwhite.util.Rlp;
 import dev.naoki.ethwhite.vm.VirtualMachine;
 
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 
 public final class TransactionProcessor {
     public static final long INTRINSIC_GAS = 21;
@@ -53,7 +54,7 @@ public final class TransactionProcessor {
             return new TransactionReceipt(false, null, transaction.startGas(), upfrontFee, new byte[0], exception.getMessage());
         }
 
-        ExecutionSession session = new ExecutionSession(state, blockContext);
+        ExecutionSession session = new ExecutionSession(state, blockContext, sender);
         MessageResult result;
         Address contractAddress = null;
         try {
@@ -95,11 +96,13 @@ public final class TransactionProcessor {
     private final class ExecutionSession implements MessageDispatcher {
         private final WorldState state;
         private final BlockContext blockContext;
+        private final Address origin;
         private long lastGasRemaining;
 
-        private ExecutionSession(WorldState state, BlockContext blockContext) {
+        private ExecutionSession(WorldState state, BlockContext blockContext, Address origin) {
             this.state = state;
             this.blockContext = blockContext;
+            this.origin = origin;
         }
 
         private long lastGasRemaining() {
@@ -110,7 +113,7 @@ public final class TransactionProcessor {
             if (gasLimit < 0) {
                 throw new ExecutionException("Negative gas limit");
             }
-            Address contractAddress = contractAddress(sender, state.getOrCreate(sender).nonce() - 1, deploymentPayload);
+            Address contractAddress = contractAddress(sender, state.getOrCreate(sender).nonce() - 1);
             WorldState snapshot = state.copy();
             Account contractAccount = state.getOrCreate(contractAddress);
             contractAccount.setType(AccountType.CONTRACT);
@@ -129,10 +132,13 @@ public final class TransactionProcessor {
                     }
                     contractAccount.setContractId(id);
                     contractRegistry.nativeContract(id).onDeploy(new ContractContext(
-                            state, blockContext, this, contractAddress, sender, value, deploymentPayload, gasMeter, 0
+                            state, blockContext, this, contractAddress, sender, origin, value, deploymentPayload, gasMeter, 0
                     ), callData);
                 } else {
-                    contractAccount.setCode(deploymentPayload);
+                    byte[] runtimeCode = virtualMachine.execute(deploymentPayload, new ContractContext(
+                            state, blockContext, this, contractAddress, sender, origin, value, deploymentPayload, gasMeter, 0
+                    ));
+                    contractAccount.setCode(runtimeCode);
                 }
             } catch (RuntimeException exception) {
                 state.restore(snapshot);
@@ -156,7 +162,7 @@ public final class TransactionProcessor {
                 Account account = state.getOrCreate(to);
                 byte[] returnData = new byte[0];
                 if (account.type() == AccountType.CONTRACT) {
-                    ContractContext context = new ContractContext(state, blockContext, this, to, from, value, data, gasMeter, depth);
+                    ContractContext context = new ContractContext(state, blockContext, this, to, from, origin, value, data, gasMeter, depth);
                     if (account.contractId() != null) {
                         NativeContract nativeContract = contractRegistry.nativeContract(account.contractId());
                         returnData = nativeContract.onMessage(context, tryParseCallDataOrThrow(data));
@@ -170,6 +176,51 @@ public final class TransactionProcessor {
                 state.restore(snapshot);
                 lastGasRemaining = 0;
                 return MessageResult.failure(0, exception.getMessage());
+            }
+        }
+
+        @Override
+        public ContractCreationResult create(Address creator, BigInteger value, byte[] initCode, long gasLimit, int depth) {
+            if (depth > MAX_CALL_DEPTH) {
+                return ContractCreationResult.failure(0, "Maximum call depth exceeded");
+            }
+            WorldState snapshot = state.copy();
+            GasMeter gasMeter = new GasMeter(gasLimit);
+            try {
+                Account creatorAccount = state.getOrCreate(creator);
+                long creatorNonce = creatorAccount.nonce();
+                creatorAccount.incrementNonce();
+                Address contractAddress = contractAddress(creator, creatorNonce);
+                Account contractAccount = state.getOrCreate(contractAddress);
+                contractAccount.setType(AccountType.CONTRACT);
+                contractAccount.setCode(new byte[0]);
+                contractAccount.setContractId(null);
+                if (value.signum() > 0) {
+                    state.transfer(creator, contractAddress, value);
+                }
+
+                CallData callData = tryParseCallData(initCode);
+                if (callData != null && "native".equals(callData.method())) {
+                    String id = callData.arg("id");
+                    if (!contractRegistry.contains(id)) {
+                        throw new ExecutionException("Unknown native contract: " + id);
+                    }
+                    contractAccount.setContractId(id);
+                    contractRegistry.nativeContract(id).onDeploy(new ContractContext(
+                            state, blockContext, this, contractAddress, creator, origin, value, initCode, gasMeter, depth
+                    ), callData);
+                } else {
+                    byte[] runtimeCode = virtualMachine.execute(initCode, new ContractContext(
+                            state, blockContext, this, contractAddress, creator, origin, value, initCode, gasMeter, depth
+                    ));
+                    contractAccount.setCode(runtimeCode);
+                }
+                lastGasRemaining = gasMeter.remaining();
+                return ContractCreationResult.success(contractAddress, gasMeter.remaining());
+            } catch (RuntimeException exception) {
+                state.restore(snapshot);
+                lastGasRemaining = 0;
+                return ContractCreationResult.failure(0, exception.getMessage());
             }
         }
     }
@@ -190,12 +241,11 @@ public final class TransactionProcessor {
         }
     }
 
-    private static Address contractAddress(Address sender, long nonce, byte[] data) {
-        return Address.fromBytes(Arrays.copyOfRange(
-                dev.naoki.ethwhite.crypto.Keccak.hash(dev.naoki.ethwhite.util.Bytes.concat(sender.toBytes(),
-                        dev.naoki.ethwhite.util.Bytes.ofLong(nonce), data)),
-                12,
-                32
+    private static Address contractAddress(Address sender, long nonce) {
+        byte[] hash = Keccak.hash(Rlp.encodeList(
+                Rlp.encodeAddress(sender),
+                Rlp.encodeLong(nonce)
         ));
+        return Address.fromBytes(java.util.Arrays.copyOfRange(hash, 12, 32));
     }
 }

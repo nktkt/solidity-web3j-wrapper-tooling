@@ -2,7 +2,8 @@ package dev.naoki.ethwhite.core;
 
 import dev.naoki.ethwhite.contract.ContractRegistry;
 import dev.naoki.ethwhite.crypto.Keccak;
-import dev.naoki.ethwhite.util.Bytes;
+import dev.naoki.ethwhite.util.PatriciaTrie;
+import dev.naoki.ethwhite.util.Rlp;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -104,23 +105,23 @@ public final class BlockProcessor {
     }
 
     public static byte[] transactionsRoot(List<SignedTransaction> transactions) {
-        List<byte[]> leaves = new ArrayList<>();
-        for (SignedTransaction transaction : transactions) {
-            leaves.add(Keccak.hash(Bytes.joinLengthPrefixed(List.of(
-                    transaction.transaction().signingPayload(),
-                    transaction.publicKey(),
-                    transaction.signature()
-            ))));
+        List<PatriciaTrie.Entry> entries = new ArrayList<>();
+        for (int i = 0; i < transactions.size(); i++) {
+            SignedTransaction transaction = transactions.get(i);
+            entries.add(new PatriciaTrie.Entry(
+                    Rlp.encodeLong(i),
+                    transaction.encode()
+            ));
         }
-        return Keccak.hash(Bytes.joinLengthPrefixed(leaves));
+        return PatriciaTrie.root(entries);
     }
 
     public static byte[] unclesRoot(List<BlockHeader> uncles) {
-        List<byte[]> leaves = new ArrayList<>();
+        List<byte[]> headers = new ArrayList<>();
         for (BlockHeader uncle : uncles) {
-            leaves.add(uncle.hash());
+            headers.add(uncle.encode());
         }
-        return Keccak.hash(Bytes.joinLengthPrefixed(leaves));
+        return Keccak.hash(Rlp.encodeList(headers));
     }
 
     private static boolean equalHash(byte[] left, byte[] right) {

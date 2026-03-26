@@ -42,4 +42,8 @@ public final class SignedTransaction {
     public boolean verify() {
         return Secp256k1.verify(Keccak.hash(transaction.signingPayload()), signature, publicKey);
     }
+
+    public byte[] encode() {
+        return transaction.encodeSignedEnvelope(publicKey, signature);
+    }
 }

@@ -1,10 +1,10 @@
 package dev.naoki.ethwhite.core;
 
 import dev.naoki.ethwhite.util.Bytes;
+import dev.naoki.ethwhite.util.Rlp;
 
 import java.math.BigInteger;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Objects;
 
 public final class Transaction {
@@ -60,13 +60,26 @@ public final class Transaction {
     }
 
     public byte[] signingPayload() {
-        return Bytes.joinLengthPrefixed(List.of(
-                Bytes.ofLong(nonce),
-                to == null ? new byte[0] : to.toBytes(),
-                Bytes.ofBigInteger(value),
-                data,
-                Bytes.ofLong(startGas),
-                Bytes.ofBigInteger(gasPrice)
-        ));
+        return Rlp.encodeList(
+                Rlp.encodeLong(nonce),
+                Rlp.encodeBigInteger(gasPrice),
+                Rlp.encodeLong(startGas),
+                Rlp.encodeAddress(to),
+                Rlp.encodeBigInteger(value),
+                Rlp.encodeBytes(data)
+        );
+    }
+
+    public byte[] encodeSignedEnvelope(byte[] publicKey, byte[] signature) {
+        return Rlp.encodeList(
+                Rlp.encodeLong(nonce),
+                Rlp.encodeBigInteger(gasPrice),
+                Rlp.encodeLong(startGas),
+                Rlp.encodeAddress(to),
+                Rlp.encodeBigInteger(value),
+                Rlp.encodeBytes(data),
+                Rlp.encodeBytes(publicKey),
+                Rlp.encodeBytes(signature)
+        );
     }
 }

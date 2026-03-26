@@ -15,6 +15,8 @@ import dev.naoki.ethwhite.core.TransactionReceipt;
 import dev.naoki.ethwhite.core.WorldState;
 import dev.naoki.ethwhite.crypto.Wallet;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.util.List;
 
@@ -61,11 +63,25 @@ final class TestSupport {
         return new Block(header, transactions, uncles);
     }
 
-    static Transaction nativeDeploy(long nonce, String id, long startGas, BigInteger gasPrice, CallData.Builder extras) {
-        CallData.Builder builder = CallData.builder("native").put("id", id);
-        if (extras != null) {
-            throw new UnsupportedOperationException("Use nativeDeploy(CallData) instead");
+    static byte[] initCodeReturning(byte[] runtimeCode) {
+        if (runtimeCode.length == 0 || runtimeCode.length > 255) {
+            throw new IllegalArgumentException("Helper supports runtime code of 1..255 bytes");
         }
-        return Transaction.createContract(nonce, BigInteger.ZERO, builder.build().encode(), startGas, gasPrice);
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            out.write(new byte[] {
+                    0x60, (byte) runtimeCode.length,
+                    0x60, 0x0c,
+                    0x60, 0x00,
+                    0x39,
+                    0x60, (byte) runtimeCode.length,
+                    0x60, 0x00,
+                    (byte) 0xf3
+            });
+            out.write(runtimeCode);
+            return out.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Unexpected byte stream error", exception);
+        }
     }
 }

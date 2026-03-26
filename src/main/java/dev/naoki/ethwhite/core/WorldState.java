@@ -2,12 +2,12 @@ package dev.naoki.ethwhite.core;
 
 import dev.naoki.ethwhite.crypto.Keccak;
 import dev.naoki.ethwhite.util.Bytes;
+import dev.naoki.ethwhite.util.PatriciaTrie;
+import dev.naoki.ethwhite.util.Rlp;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -63,38 +63,51 @@ public final class WorldState {
     }
 
     public byte[] stateRoot() {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        try {
-            for (Map.Entry<Address, Account> entry : accounts.entrySet()) {
-                Address address = entry.getKey();
-                Account account = entry.getValue();
-                out.write(address.toBytes());
-                out.write(Bytes.ofLong(account.nonce()));
-                out.write(Bytes.writeLengthPrefixed(Bytes.ofBigInteger(account.balance())));
-                out.write((byte) account.type().ordinal());
-                out.write(Bytes.writeLengthPrefixed(account.code()));
-                out.write(Bytes.writeLengthPrefixed(account.contractId() == null
-                        ? new byte[0]
-                        : account.contractId().getBytes(StandardCharsets.UTF_8)));
-                for (Map.Entry<BigInteger, Word> storageEntry : account.storage().entrySet()) {
-                    out.write(Bytes.leftPad(Bytes.ofBigInteger(storageEntry.getKey()), Word.SIZE));
-                    out.write(storageEntry.getValue().toBytes());
-                }
-                out.write(new byte[] {(byte) 0xff});
-                for (Map.Entry<String, byte[]> metadataEntry : account.metadata().entrySet()) {
-                    out.write(Bytes.writeLengthPrefixed(metadataEntry.getKey().getBytes(StandardCharsets.UTF_8)));
-                    out.write(Bytes.writeLengthPrefixed(metadataEntry.getValue()));
-                }
-                out.write(new byte[] {(byte) 0xfe});
-            }
-        } catch (IOException exception) {
-            throw new IllegalStateException("Unexpected byte stream error", exception);
+        var entries = new ArrayList<PatriciaTrie.Entry>();
+        for (Map.Entry<Address, Account> entry : accounts.entrySet()) {
+            entries.add(new PatriciaTrie.Entry(
+                    Keccak.hash(entry.getKey().toBytes()),
+                    accountValue(entry.getValue())
+            ));
         }
-        return Keccak.hash(out.toByteArray());
+        return PatriciaTrie.root(entries);
     }
 
     public String describeBalance(Address address) {
         Account account = accounts.get(address);
         return account == null ? "0" : account.balance().toString();
+    }
+
+    private byte[] accountValue(Account account) {
+        return Rlp.encodeList(
+                Rlp.encodeLong(account.nonce()),
+                Rlp.encodeBigInteger(account.balance()),
+                Rlp.encodeBytes(storageRoot(account)),
+                Rlp.encodeBytes(codeHash(account))
+        );
+    }
+
+    private byte[] storageRoot(Account account) {
+        var entries = new ArrayList<PatriciaTrie.Entry>();
+        for (Map.Entry<BigInteger, Word> storageEntry : account.storage().entrySet()) {
+            entries.add(new PatriciaTrie.Entry(
+                    Keccak.hash(Bytes.leftPad(Bytes.ofBigInteger(storageEntry.getKey()), Word.SIZE)),
+                    Rlp.encodeScalarBytes(storageEntry.getValue().toBytes())
+            ));
+        }
+        for (Map.Entry<String, byte[]> metadataEntry : account.metadata().entrySet()) {
+            entries.add(new PatriciaTrie.Entry(
+                    Keccak.hash(("meta:" + metadataEntry.getKey()).getBytes(StandardCharsets.UTF_8)),
+                    Rlp.encodeBytes(metadataEntry.getValue())
+            ));
+        }
+        return PatriciaTrie.root(entries);
+    }
+
+    private byte[] codeHash(Account account) {
+        if (account.contractId() != null) {
+            return Keccak.hash(("native:" + account.contractId()).getBytes(StandardCharsets.UTF_8));
+        }
+        return Keccak.hash(account.code());
     }
 }

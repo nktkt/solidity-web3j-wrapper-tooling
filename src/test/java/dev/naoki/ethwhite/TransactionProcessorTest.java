@@ -52,10 +52,12 @@ final class TransactionProcessorTest {
         state.getOrCreate(owner.address()).credit(Units.ETHER.multiply(BigInteger.TEN));
 
         byte[] bytecode = new byte[] {
-                0x60, 0x2a,
-                0x60, 0x01,
-                0x55,
-                0x00
+                0x65, 0x60, 0x2a, 0x60, 0x01, 0x55, 0x00,
+                0x60, 0x00,
+                0x52,
+                0x60, 0x06,
+                0x60, 0x1a,
+                (byte) 0xf3
         };
         Transaction deploy = Transaction.createContract(0, BigInteger.ZERO, bytecode, 1_000, BigInteger.ONE);
         TransactionReceipt deployReceipt = processor.apply(state, dev.naoki.ethwhite.core.SignedTransaction.sign(deploy, owner),
@@ -83,5 +85,84 @@ final class TransactionProcessorTest {
 
         assertThrows(RuntimeException.class, () -> processor.apply(state, dev.naoki.ethwhite.core.SignedTransaction.sign(transaction, sender),
                 new BlockContext(1, 1_700_000_000L, new byte[32], Address.random(), 1_000_000L, 1L)));
+    }
+
+    @Test
+    void contractCreationRunsInitCodeAndInstallsRuntime() {
+        TransactionProcessor processor = new TransactionProcessor(new ContractRegistry());
+        WorldState state = new WorldState();
+        Wallet owner = Wallet.create();
+        Address miner = Address.random();
+        state.getOrCreate(owner.address()).credit(Units.ETHER.multiply(BigInteger.TEN));
+
+        byte[] runtimeCode = new byte[] {
+                0x60, 0x2a,
+                0x60, 0x01,
+                0x55,
+                0x00
+        };
+        Transaction deploy = Transaction.createContract(0, BigInteger.ZERO, TestSupport.initCodeReturning(runtimeCode), 2_000, BigInteger.ONE);
+
+        TransactionReceipt receipt = processor.apply(state, dev.naoki.ethwhite.core.SignedTransaction.sign(deploy, owner),
+                new BlockContext(1, 1_700_000_000L, new byte[32], miner, 1_000_000L, 1L));
+
+        assertTrue(receipt.success());
+        assertArrayEquals(runtimeCode, state.getOrCreate(receipt.contractAddress()).code());
+    }
+
+    @Test
+    void vmCallOpcodeCanInvokeAnotherContract() {
+        TransactionProcessor processor = new TransactionProcessor(new ContractRegistry());
+        WorldState state = new WorldState();
+        Wallet owner = Wallet.create();
+        Address miner = Address.random();
+        state.getOrCreate(owner.address()).credit(Units.ETHER.multiply(BigInteger.TEN));
+
+        byte[] calleeRuntime = new byte[] {
+                0x60, 0x2a,
+                0x60, 0x00,
+                0x52,
+                0x60, 0x20,
+                0x60, 0x00,
+                (byte) 0xf3
+        };
+        TransactionReceipt callee = processor.apply(state,
+                dev.naoki.ethwhite.core.SignedTransaction.sign(
+                        Transaction.createContract(0, BigInteger.ZERO, TestSupport.initCodeReturning(calleeRuntime), 3_000, BigInteger.ONE),
+                        owner),
+                new BlockContext(1, 1_700_000_000L, new byte[32], miner, 1_000_000L, 1L));
+
+        byte[] address = callee.contractAddress().toBytes();
+        byte[] parentRuntime = new byte[] {
+                0x60, 0x20,
+                0x60, 0x00,
+                0x60, 0x00,
+                0x60, 0x00,
+                0x60, 0x00,
+                0x73, address[0], address[1], address[2], address[3], address[4], address[5], address[6], address[7], address[8], address[9],
+                address[10], address[11], address[12], address[13], address[14], address[15], address[16], address[17], address[18], address[19],
+                0x61, 0x03, (byte) 0xe8,
+                (byte) 0xf1,
+                0x50,
+                0x60, 0x00,
+                0x51,
+                0x60, 0x01,
+                0x55,
+                0x00
+        };
+        TransactionReceipt parent = processor.apply(state,
+                dev.naoki.ethwhite.core.SignedTransaction.sign(
+                        Transaction.createContract(1, BigInteger.ZERO, TestSupport.initCodeReturning(parentRuntime), 5_000, BigInteger.ONE),
+                        owner),
+                new BlockContext(2, 1_700_000_010L, new byte[32], miner, 1_000_000L, 1L));
+
+        TransactionReceipt invoke = processor.apply(state,
+                dev.naoki.ethwhite.core.SignedTransaction.sign(
+                        new Transaction(2, parent.contractAddress(), BigInteger.ZERO, new byte[0], 10_000, BigInteger.ONE),
+                        owner),
+                new BlockContext(3, 1_700_000_020L, new byte[32], miner, 1_000_000L, 1L));
+
+        assertTrue(invoke.success());
+        assertEquals(BigInteger.valueOf(42), state.getOrCreate(parent.contractAddress()).storage().get(BigInteger.ONE).toBigInteger());
     }
 }

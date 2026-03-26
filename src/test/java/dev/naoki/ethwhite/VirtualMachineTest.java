@@ -1,6 +1,7 @@
 package dev.naoki.ethwhite;
 
 import dev.naoki.ethwhite.contract.ContractContext;
+import dev.naoki.ethwhite.contract.ContractCreationResult;
 import dev.naoki.ethwhite.contract.MessageDispatcher;
 import dev.naoki.ethwhite.core.Address;
 import dev.naoki.ethwhite.core.BlockContext;
@@ -43,8 +44,14 @@ final class VirtualMachineTest {
                     public MessageResult call(Address from, Address to, BigInteger value, byte[] data, long gasLimit, int depth) {
                         return MessageResult.success(gasLimit, new byte[0]);
                     }
+
+                    @Override
+                    public ContractCreationResult create(Address creator, BigInteger value, byte[] initCode, long gasLimit, int depth) {
+                        return ContractCreationResult.failure(gasLimit, "not supported in test");
+                    }
                 },
                 contract,
+                Address.random(),
                 Address.random(),
                 BigInteger.ZERO,
                 new byte[0],

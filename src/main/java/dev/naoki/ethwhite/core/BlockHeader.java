@@ -1,10 +1,9 @@
 package dev.naoki.ethwhite.core;
 
 import dev.naoki.ethwhite.crypto.Keccak;
-import dev.naoki.ethwhite.util.Bytes;
+import dev.naoki.ethwhite.util.Rlp;
 
 import java.math.BigInteger;
-import java.util.List;
 
 public record BlockHeader(
         byte[] parentHash,
@@ -21,35 +20,39 @@ public record BlockHeader(
 ) {
     private static final BigInteger MAX_TARGET = BigInteger.ONE.shiftLeft(255);
 
+    public byte[] encode() {
+        return Rlp.encodeList(
+                Rlp.encodeBytes(parentHash),
+                Rlp.encodeBytes(stateRoot),
+                Rlp.encodeBytes(transactionsRoot),
+                Rlp.encodeBytes(unclesRoot),
+                Rlp.encodeAddress(miner),
+                Rlp.encodeLong(number),
+                Rlp.encodeLong(timestamp),
+                Rlp.encodeLong(difficulty),
+                Rlp.encodeLong(gasLimit),
+                Rlp.encodeLong(gasUsed),
+                Rlp.encodeLong(nonce)
+        );
+    }
+
     public byte[] hash() {
-        return Keccak.hash(Bytes.joinLengthPrefixed(List.of(
-                parentHash,
-                stateRoot,
-                transactionsRoot,
-                unclesRoot,
-                miner.toBytes(),
-                Bytes.ofLong(number),
-                Bytes.ofLong(timestamp),
-                Bytes.ofLong(difficulty),
-                Bytes.ofLong(gasLimit),
-                Bytes.ofLong(gasUsed),
-                Bytes.ofLong(nonce)
-        )));
+        return Keccak.hash(encode());
     }
 
     public byte[] hashWithoutNonce() {
-        return Keccak.hash(Bytes.joinLengthPrefixed(List.of(
-                parentHash,
-                stateRoot,
-                transactionsRoot,
-                unclesRoot,
-                miner.toBytes(),
-                Bytes.ofLong(number),
-                Bytes.ofLong(timestamp),
-                Bytes.ofLong(difficulty),
-                Bytes.ofLong(gasLimit),
-                Bytes.ofLong(gasUsed)
-        )));
+        return Keccak.hash(Rlp.encodeList(
+                Rlp.encodeBytes(parentHash),
+                Rlp.encodeBytes(stateRoot),
+                Rlp.encodeBytes(transactionsRoot),
+                Rlp.encodeBytes(unclesRoot),
+                Rlp.encodeAddress(miner),
+                Rlp.encodeLong(number),
+                Rlp.encodeLong(timestamp),
+                Rlp.encodeLong(difficulty),
+                Rlp.encodeLong(gasLimit),
+                Rlp.encodeLong(gasUsed)
+        ));
     }
 
     public boolean validProofOfWork() {
