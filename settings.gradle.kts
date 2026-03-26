@@ -1,2 +1,1 @@
-rootProject.name = "eth-white"
-
+rootProject.name = "solidity-java-web3j-tooling"
