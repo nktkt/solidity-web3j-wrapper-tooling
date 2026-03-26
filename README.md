@@ -1,108 +1,319 @@
-# eth-white
+# Java Solidity Compiler and Web3j Wrapper Generator
 
-`eth-white` is a Java reference implementation inspired by the 2014 Ethereum whitepaper by Vitalik Buterin.
+Production-ready Java 21 tooling for compiling Solidity contracts with the full `solc` compiler and generating Java wrappers with the Web3j CLI.
 
-It is not a production Ethereum client. Instead, it is a compact, readable project that implements the major ideas described in the whitepaper:
+This project is designed to be explicit, deterministic, and easy to run on macOS and Linux. Java code orchestrates all external tools through `ProcessBuilder`, captures command output in detail, and fails with clear domain-specific exceptions.
 
-- account-based state
-- signed transactions with nonce protection
-- gas accounting and fee refunds
-- contract creation and contract-to-contract messages
-- a small EVM-like bytecode interpreter
-- block validation, proof-of-work, uncle rewards, and GHOST-style chain selection
-- whitepaper application examples as native contracts
+## What This Project Does
 
-## What is implemented
+- Compiles every Solidity contract under `src/main/solidity`
+- Prefers a locally installed `solc` binary when available
+- Falls back automatically to Docker when local `solc` is not available
+- Generates ABI files
+- Generates BIN files
+- Generates Java wrapper classes with the Web3j CLI
+- Compiles generated wrappers as part of the Gradle workflow
+- Requires no blockchain node for build or test execution
 
-### Core protocol
+## Technology Choices
 
-- Accounts with nonce, balance, code, and storage
-- Transaction validation and `APPLY(S, TX) -> S'` style state transitions
-- Upfront gas charging, execution metering, refunds, and revert-on-failure behavior
-- Contract deployment for:
-  - native Java contracts
-  - bytecode contracts executed by the mini VM
-- Bytecode VM with stack, memory, storage, jumps, calldata access, and return values
-- Block headers, transaction roots, uncle roots, PoW validation, miner rewards, uncle rewards, and chain head selection by observed subtree weight
+- Java 21
+- Gradle with Kotlin DSL
+- Full Solidity compiler: `solc`
+- Docker fallback image: `ghcr.io/argotorg/solc:stable`
+- Web3j CLI for wrapper generation
+- JUnit 5 for tests
 
-### Whitepaper application examples
-
-- `token`: on-chain token balances and transfers
-- `priceFeed`: trusted oracle contract for price updates
-- `hedge`: a whitepaper-style derivative / stable-value hedge contract
-- `nameRegistry`: name registration, update, and ownership transfer
-- `fileStorage`: Merkle-proof-based storage challenge contract
-- `dao`: proposal, vote, finalize, and membership mutation logic
-
-## Security and consistency fixes included
-
-While building the implementation, the following issues were explicitly checked and fixed:
-
-- replay protection via strict nonce validation
-- revert safety for failed contract execution and out-of-gas paths
-- signature verification using raw hashed payloads instead of accidental double-hashing
-- duplicate vote protection in the DAO
-- uncle validation to reject already-included or canonical-ancestor blocks
-- balance underflow prevention using checked `BigInteger` logic
-
-## Project layout
+## Project Layout
 
 ```text
-src/main/java/dev/naoki/ethwhite/
-  core/       protocol state, transactions, gas, blocks, blockchain
-  crypto/     keccak and secp256k1 helpers
-  contract/   native contract execution interfaces
-  vm/         small EVM-like interpreter
-  sample/     whitepaper application contracts
-  util/       byte, hex, and Merkle helpers
+.
+|-- build.gradle.kts
+|-- gradle/
+|-- gradlew
+|-- gradlew.bat
+|-- settings.gradle.kts
+`-- src
+    |-- main
+    |   |-- java
+    |   |   `-- com/example/soliditycompiler
+    |   `-- solidity
+    |       `-- HelloWorld.sol
+    `-- test
+        `-- java
+            `-- com/example/soliditycompiler
 ```
 
-## Build and test
+## Generated Output
 
-Requirements:
+The build produces the following outputs:
 
-- Java 21+
-- Maven 3.9+
+- ABI files: `build/generated/contracts/abi`
+- BIN files: `build/generated/contracts/bin`
+- Raw `solc` output: `build/generated/contracts/raw`
+- Generated Java wrappers: `build/generated/source/web3j/main/java`
+- Bootstrap classes for custom JavaExec tasks: `build/tooling-classes`
 
-Run the full test suite:
+## Prerequisites
+
+You need:
+
+- Java 21
+- Git
+- Web3j CLI on `PATH`
+- Either:
+  - local `solc` on `PATH`, or
+  - Docker with a working daemon
+
+The repository includes the Gradle wrapper, so `./gradlew` is the recommended entrypoint.
+
+## Installation Examples
+
+### Verify Java and Gradle
 
 ```bash
-mvn test
+java -version
+./gradlew -v
 ```
 
-Package the project:
+### Install Web3j CLI
 
 ```bash
-mvn package
+curl -L get.web3j.io | sh
+. "$HOME/.web3j/source.sh"
+web3j -V
 ```
 
-## Quick demo
-
-Run the small token-transfer demo:
+### Install `solc` on macOS
 
 ```bash
-mvn -q -DskipTests exec:java -Dexec.mainClass=dev.naoki.ethwhite.Main
+brew update
+brew upgrade
+brew tap ethereum/ethereum
+brew install solidity
+solc --version
 ```
 
-If you do not want to use Maven Exec, you can also run the main class from your IDE.
+### Install `solc` on Linux
 
-## Tests included
+```bash
+sudo add-apt-repository ppa:ethereum/ethereum
+sudo apt-get update
+sudo apt-get install solc
+solc --version
+```
 
-The test suite covers:
+### Verify Docker Fallback
 
-- Ether transfers and fee accounting
-- VM storage/write/return behavior
-- revert-on-failure and gas burning
-- token, hedge, DAO, and file-storage scenarios
-- GHOST head selection and uncle/nephew rewards
+```bash
+docker --version
+docker info
+docker run --rm ghcr.io/argotorg/solc:stable --version
+```
 
-## Scope notes
+## How It Works
 
-This project follows the whitepaper conceptually, but intentionally keeps some parts compact:
+1. `SolcLocator` checks whether local `solc` is available with `solc --version`.
+2. If local `solc` is available, compilation uses it.
+3. If local `solc` is missing, the tool checks Docker CLI and Docker daemon availability.
+4. `SolidityCompilerService` compiles each `.sol` file with optimizer enabled.
+5. ABI and BIN artifacts are normalized into dedicated build directories.
+6. `WrapperGenerationService` validates ABI/BIN pairs.
+7. Web3j CLI generates Java wrappers with:
 
-- It uses a simplified deterministic state root instead of a full Merkle Patricia Trie implementation.
-- The VM is intentionally small and educational, not opcode-complete.
-- The application contracts are written as native Java contracts for clarity.
-- Networking, peer discovery, and real-world consensus hardening are out of scope.
+```bash
+web3j generate solidity -b <bin> -a <abi> -o <java-output-dir> -p com.example.soliditycompiler.generated
+```
 
-That tradeoff keeps the codebase small enough to audit, extend, and study.
+## CLI Commands
+
+The Java entrypoint is `com.example.soliditycompiler.Main`.
+
+Supported commands:
+
+- `compile`
+- `generate-wrappers`
+- `build-all`
+
+## Gradle Tasks
+
+- `./gradlew runCompile`
+- `./gradlew runGenerateWrappers`
+- `./gradlew runBuildAll`
+- `./gradlew test`
+
+### Compile Solidity Only
+
+```bash
+./gradlew runCompile
+```
+
+### Generate Wrappers
+
+`runGenerateWrappers` depends on `runCompile`, so it compiles contracts first.
+
+```bash
+./gradlew runGenerateWrappers
+```
+
+### Full Build
+
+`runBuildAll` performs the full pipeline:
+
+1. Compile Solidity
+2. Generate ABI and BIN
+3. Generate Web3j wrappers
+4. Compile Java sources including generated wrappers
+
+```bash
+./gradlew runBuildAll
+```
+
+## Example Contract
+
+The sample contract is located at:
+
+- `src/main/solidity/HelloWorld.sol`
+
+It includes:
+
+- a `string` state variable
+- a constructor that accepts an initial greeting
+- a getter
+- a setter
+
+## Testing
+
+Unit tests are designed to run without external infrastructure.
+
+They do not require:
+
+- real `solc`
+- Docker
+- Web3j CLI
+- a blockchain node
+
+Run tests with:
+
+```bash
+./gradlew test
+```
+
+The tests cover:
+
+- local `solc` detection
+- Docker fallback selection
+- command construction
+- timeout handling
+- non-zero exit handling
+- wrapper generation preconditions
+- Solidity file discovery
+
+## Troubleshooting
+
+### `solc` Not Found
+
+If `solc --version` fails, the tool automatically tries Docker mode.
+
+Checks:
+
+```bash
+solc --version
+docker --version
+docker info
+```
+
+### Docker Daemon Not Running
+
+If Docker is installed but not running, the tool stops early with a clear error instead of deleting existing generated artifacts.
+
+Checks:
+
+```bash
+docker info
+docker ps
+```
+
+### `web3j` Not Found
+
+Wrapper generation requires the Web3j CLI on `PATH`.
+
+Checks:
+
+```bash
+web3j -V
+which web3j
+```
+
+### Docker Permission Issues
+
+If Docker fallback fails because of permissions, verify that your user can access Docker.
+
+Checks:
+
+```bash
+docker ps
+docker run --rm ghcr.io/argotorg/solc:stable --version
+```
+
+On Linux, you may need Docker post-install permission setup. On macOS, make sure Docker Desktop is fully started.
+
+### Linux File Ownership Issues
+
+When Docker fallback is used on POSIX systems, the tool passes the current UID and GID to `docker run` when available. This helps avoid root-owned generated files on Linux bind mounts.
+
+### Import Path Issues
+
+Compilation uses an explicit working directory and these `solc` options:
+
+- `--base-path .`
+- `--include-path src/main/solidity`
+
+If you add more contracts or subdirectories, keep imports relative to `src/main/solidity` or relative to the importing file.
+
+## Publishing to a New GitHub Repository
+
+If you want to push this project to a new GitHub repository:
+
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin git@github.com:<your-account>/<your-repo>.git
+git push -u origin main
+```
+
+If the repository already exists locally and you only need to connect and push:
+
+```bash
+git add .
+git commit -m "Prepare project for GitHub"
+git branch -M main
+git remote add origin git@github.com:<your-account>/<your-repo>.git
+git push -u origin main
+```
+
+For HTTPS instead of SSH:
+
+```bash
+git remote add origin https://github.com/<your-account>/<your-repo>.git
+git push -u origin main
+```
+
+## Why This Design
+
+- Java orchestrates all external tools directly
+- `ProcessBuilder` is used consistently for execution
+- commands always run with an explicit working directory
+- stdout, stderr, exit code, command, and working directory are captured
+- timeouts fail fast with a rich exception
+- Docker fallback is automatic but validated carefully
+- generated sources are compiled as part of the Gradle build
+- the implementation avoids hidden build magic and avoids the Web3j Gradle plugin
+
+## Reference Documentation
+
+- [Web3j CLI](https://docs.web3j.io/4.8.7/command_line_tools/)
+- [Solidity Installation](https://docs.soliditylang.org/en/latest/installing-solidity.html)
+- [Docker Installation](https://docs.docker.com/get-started/introduction/get-docker-desktop/)
